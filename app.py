@@ -1,6 +1,6 @@
 """
-Elite Dangerous Companion — MVP v0.1
-Single endpoint: search a system on EDSM.
+Elite Dangerous Companion — v0.2
+Features: System search + Station market data
 """
 
 import os
@@ -12,7 +12,7 @@ from flask import Flask, render_template_string, jsonify
 app = Flask(__name__)
 
 EDSM_API = "https://www.edsm.net"
-HEADERS = {"User-Agent": "StartMit-EliteCompanion/0.1"}
+HEADERS = {"User-Agent": "StartMit-EliteCompanion/0.2"}
 
 
 def esm_get(endpoint, params=None):
@@ -44,6 +44,16 @@ def api_system(name):
     })
 
 
+@app.route("/api/market/<system>/<station>")
+def api_market(system, station):
+    """EDSM station market data."""
+    data = esm_get("/api-system-v1/stations/market", {
+        "systemName": system,
+        "stationName": station,
+    })
+    return jsonify(data)
+
+
 HTML = '''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -63,9 +73,15 @@ button{background:var(--accent);color:#000;border:none;padding:12px 24px;border-
 button:hover{background:#ffb84d}
 button:disabled{opacity:0.5;cursor:not-allowed}
 .result-item{background:var(--input);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:10px;transition:border-color 0.2s}
-.result-item:hover{border-color:var(--cyan)}
+.result-item:hover{border-color:var(--cyan);cursor:pointer}
 .result-item .name{color:var(--cyan);font-weight:600;font-size:1em;margin-bottom:4px}
 .result-item .info{color:var(--dim);font-size:0.8em}
+.market-row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)}
+.market-row:last-child{border-bottom:none}
+.market-name{flex:2;color:var(--text)}
+.market-buy{flex:1;text-align:right;color:var(--green)}
+.market-sell{flex:1;text-align:right;color:var(--red)}
+.market-supply{flex:1;text-align:right;color:var(--dim);font-size:0.8em}
 .badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:0.7em;margin:2px}
 .badge-green{background:rgba(0,255,136,0.12);color:var(--green)}
 .badge-cyan{background:rgba(0,212,255,0.12);color:var(--cyan)}
@@ -75,12 +91,14 @@ button:disabled{opacity:0.5;cursor:not-allowed}
 .stat{background:var(--input);border:1px solid var(--border);border-radius:6px;padding:12px;text-align:center}
 .stat .val{font-size:1.2em;font-weight:700;color:var(--cyan)}
 .stat .lbl{font-size:0.65em;color:var(--dim);text-transform:uppercase;margin-top:2px}
+.market-loading{text-align:center;padding:15px;color:var(--dim);font-size:0.85em}
+.market-header{display:flex;justify-content:space-between;padding:8px 0;border-bottom:2px solid var(--accent);margin-bottom:8px;font-size:0.75em;color:var(--dim);text-transform:uppercase}
 </style>
 </head>
 <body>
 
 <h1>⚔ Elite Companion</h1>
-<p class="subtitle">by StartMit — MVP v0.1</p>
+<p class="subtitle">by StartMit — v0.2</p>
 
 <div class="card">
   <input id="systemInput" type="text" placeholder="Enter system name..." value="Diaguandri">
@@ -111,6 +129,51 @@ async function search() {
   }
 }
 
+async function loadMarket(systemName, stationName, btn) {
+  // Toggle: click again to collapse
+  const existing = document.getElementById('market-' + stationName.replace(/[^a-z0-9]/gi, '_'));
+  if (existing) { existing.remove(); return; }
+
+  btn.disabled = true;
+  btn.textContent = 'Loading market...';
+
+  const container = document.createElement('div');
+  container.id = 'market-' + stationName.replace(/[^a-z0-9]/gi, '_');
+  container.innerHTML = '<div class="market-loading">Loading market data...</div>';
+  btn.parentElement.parentElement.appendChild(container);
+
+  try {
+    const res = await fetch('/api/market/' + encodeURIComponent(systemName) + '/' + encodeURIComponent(stationName));
+    const data = await res.json();
+    renderMarket(container, data);
+  } catch (e) {
+    container.innerHTML = '<div class="error">Failed to load market data.</div>';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'View Market';
+  }
+}
+
+function renderMarket(container, data) {
+  if (!data || data.error || !data.items || data.items.length === 0) {
+    container.innerHTML = '<div class="empty-state" style="padding:15px">No market data available for this station.</div>';
+    return;
+  }
+
+  let html = '<div style="margin-top:12px">';
+  html += '<div class="market-header"><span>Commodity</span><span>Buy</span><span>Sell</span><span>Supply</span></div>';
+  data.items.slice(0, 20).forEach(item => {
+    html += '<div class="market-row">';
+    html += '<span class="market-name">' + escapeHtml(item.name || 'Unknown') + '</span>';
+    html += '<span class="market-buy">' + (item.priceBuy ? '€' + item.priceBuy.toLocaleString() : '-') + '</span>';
+    html += '<span class="market-sell">' + (item.priceSell ? '€' + item.priceSell.toLocaleString() : '-') + '</span>';
+    html += '<span class="market-supply">' + (item.stock != null ? item.stock.toLocaleString() : '-') + '</span>';
+    html += '</div>';
+  });
+  html += '</div>';
+  container.innerHTML = html;
+}
+
 function render(data, queryName) {
   const sys = data.system || {};
   const stations = data.stations || [];
@@ -119,7 +182,7 @@ function render(data, queryName) {
   // System info
   if (!sys.error && sys.name) {
     html += '<div class="card">';
-    html += '<div class="result-item" style="border:none;background:none;padding:0"><div class="name">🌌 ' + escapeHtml(sys.name) + '</div>';
+    html += '<div style="border:none;background:none;padding:0"><div class="name" style="color:var(--cyan);font-size:1.1em">🌌 ' + escapeHtml(sys.name) + '</div>';
     if (sys.information) {
       html += '<div class="info">Faction: ' + escapeHtml(sys.information.faction || 'Unknown') + ' • State: ' + escapeHtml(sys.information.factionState || 'Unknown') + '</div>';
       html += '<div class="info">Economy: ' + escapeHtml(sys.information.economy || 'Unknown') + ' • Security: ' + escapeHtml(sys.information.security || 'Unknown') + '</div>';
@@ -137,16 +200,20 @@ function render(data, queryName) {
 
   // Stations
   if (Array.isArray(stations) && stations.length > 0) {
-    html += '<div class="card"><div style="color:var(--accent);font-size:0.85em;margin-bottom:12px;text-transform:uppercase;letter-spacing:0.5px">Stations (' + stations.length + ')</div>';
+    html += '<div class="card"><div style="color:var(--accent);font-size:0.85em;margin-bottom:12px;text-transform:uppercase;letter-spacing:0.5px">Stations (' + stations.length + ') — click to view market</div>';
     stations.forEach(s => {
-      html += '<div class="result-item">';
-      html += '<div class="name">' + escapeHtml(s.name) + '</div>';
+      const safeId = s.name.replace(/[^a-z0-9]/gi, '_');
+      html += '<div class="result-item" onclick="loadMarket(\'' + escapeHtml(sys.name || queryName) + '\', \'' + escapeHtml(s.name) + '\', this)">';
+      html += '<div style="display:flex;justify-content:space-between;align-items:center">';
+      html += '<div><div class="name">' + escapeHtml(s.name) + '</div>';
       html += '<div class="info">' + (s.type || 'Unknown') + (s.distanceToStar ? ' • ' + s.distanceToStar + ' ls' : '') + '</div>';
       html += '<div style="margin-top:4px">';
       if (s.hasMarket) html += '<span class="badge badge-green">Market</span>';
       if (s.hasShipyard) html += '<span class="badge badge-cyan">Shipyard</span>';
       if (s.hasOutfitting) html += '<span class="badge badge-cyan">Outfitting</span>';
       if (s.hasRefuel) html += '<span class="badge badge-green">Refuel</span>';
+      html += '</div></div>';
+      html += '<div style="text-align:right"><button class="btn btn-secondary" style="width:auto;padding:8px 14px;font-size:0.8em" onclick="event.stopPropagation();loadMarket(\'' + escapeHtml(sys.name || queryName) + '\', \'' + escapeHtml(s.name) + '\', this)">View Market</button></div>';
       html += '</div></div>';
     });
     html += '</div>';
@@ -177,5 +244,5 @@ def index():
 
 
 if __name__ == "__main__":
-    print("Elite Companion MVP running on http://localhost:5000")
+    print("Elite Companion v0.2 running on http://localhost:5000")
     app.run(host="0.0.0.0", port=5000, debug=True)
