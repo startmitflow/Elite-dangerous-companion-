@@ -1,18 +1,18 @@
 """
-Elite Dangerous Companion — v0.2
-Features: System search + Station market data
+Elite Dangerous Companion — v0.3
+Features: System search + Station market + Route planner
 """
 
 import os
 import urllib.request
 import urllib.parse
 import json
-from flask import Flask, render_template_string, jsonify
+from flask import Flask, render_template_string, jsonify, request
 
 app = Flask(__name__)
 
 EDSM_API = "https://www.edsm.net"
-HEADERS = {"User-Agent": "StartMit-EliteCompanion/0.2"}
+HEADERS = {"User-Agent": "StartMit-EliteCompanion/0.3"}
 
 
 def esm_get(endpoint, params=None):
@@ -58,6 +58,47 @@ def api_market(system, station):
     return jsonify(data)
 
 
+@app.route("/api/route")
+def api_route():
+    """Route planner: distance + estimated jumps between two systems."""
+    from_sys = request.args.get("from", "").strip()
+    to_sys = request.args.get("to", "").strip()
+    if not from_sys or not to_sys:
+        return jsonify({"error": "Both 'from' and 'to' system names required"}), 400
+
+    from_data = esm_get("/api-v1/system", {
+        "systemName": from_sys,
+        "showCoordinates": 1,
+    })
+    to_data = esm_get("/api-v1/system", {
+        "systemName": to_sys,
+        "showCoordinates": 1,
+    })
+
+    result = {"from": from_sys, "to": to_sys}
+
+    if from_data.get("error"):
+        result["fromError"] = from_data.get("error")
+    if to_data.get("error"):
+        result["toError"] = to_data.get("error")
+
+    try:
+        fc = from_data.get("coordinates", {})
+        tc = to_data.get("coordinates", {})
+        dist = ((tc.get("x", 0) - fc.get("x", 0))**2 +
+                (tc.get("y", 0) - fc.get("y", 0))**2 +
+                (tc.get("z", 0) - fc.get("z", 0))**2)**0.5
+        result["distanceLy"] = round(dist, 2)
+        result["estJumps"] = max(1, round(dist / 30))
+        result["fromCoords"] = {"x": fc.get("x"), "y": fc.get("y"), "z": fc.get("z")}
+        result["toCoords"] = {"x": tc.get("x"), "y": tc.get("y"), "z": tc.get("z")}
+    except (TypeError, ValueError):
+        result["error"] = "Could not calculate route — systems may not have coordinates"
+
+
+    return jsonify(result)
+
+
 HTML = '''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -78,6 +119,8 @@ button:hover{background:#ffb84d}
 button:disabled{opacity:0.5;cursor:not-allowed}
 .result-item{background:var(--input);border:1px solid var(--border);border-radius:8px;padding:14px;margin-bottom:10px;transition:border-color 0.2s}
 .result-item:hover{border-color:var(--cyan);cursor:pointer}
+.form-group{display:flex;flex-direction:column;gap:5px}
+.form-group label{font-size:0.72em;color:var(--dim);text-transform:uppercase}
 .result-item .name{color:var(--cyan);font-weight:600;font-size:1em;margin-bottom:4px}
 .result-item .info{color:var(--dim);font-size:0.8em}
 .market-row{display:flex;justify-content:space-between;padding:6px 0;border-bottom:1px solid var(--border)}
@@ -102,11 +145,27 @@ button:disabled{opacity:0.5;cursor:not-allowed}
 <body>
 
 <h1>⚔ Elite Companion</h1>
-<p class="subtitle">by StartMit — v0.2-fix</p>
+<p class="subtitle">by StartMit — v0.3</p>
 
 <div class="card">
   <input id="systemInput" type="text" placeholder="Enter system name..." value="Diaguandri">
   <button id="searchBtn" onclick="search()">Search System</button>
+</div>
+
+<div class="card" style="border-color:var(--accent);border-width:2px">
+  <div class="card-title" style="color:var(--accent)">🗺️ Route Planner</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:10px;align-items:end">
+    <div class="form-group">
+      <label>From System</label>
+      <input id="routeFrom" type="text" placeholder="Sol">
+    </div>
+    <div class="form-group">
+      <label>To System</label>
+      <input id="routeTo" type="text" placeholder="Diaguandri">
+    </div>
+    <button class="btn btn-primary" style="width:auto;padding:12px 20px" onclick="calcRoute()">Go</button>
+  </div>
+  <div id="routeResult" style="margin-top:12px;display:none"></div>
 </div>
 
 <div id="results"></div>
@@ -238,6 +297,43 @@ function escapeHtml(text) {
 document.getElementById('systemInput').addEventListener('keypress', e => {
   if (e.key === 'Enter') search();
 });
+document.getElementById('routeTo').addEventListener('keypress', e => {
+  if (e.key === 'Enter') calcRoute();
+});
+
+async function calcRoute() {
+  const from = $('routeFrom').value.trim();
+  const to = $('routeTo').value.trim();
+  if (!from || !to) return;
+  const result = $('routeResult');
+  result.style.display = 'none';
+  result.innerHTML = '<div class="empty-state">Calculating route...</div>';
+  result.style.display = 'block';
+  try {
+    const res = await fetch('/api/route?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to));
+    const data = await res.json();
+    if (data.error) {
+      result.innerHTML = '<div class="error">' + escapeHtml(data.error) + '</div>';
+    } else {
+      let html = '<div class="route-card">';
+      html += '<div style="color:var(--accent);font-size:0.9em;margin-bottom:10px">Route: ' + escapeHtml(data.from) + ' → ' + escapeHtml(data.to) + '</div>';
+      html += '<div class="row"><span class="label">Distance</span><span class="value">' + (data.distanceLy || '?') + ' Ly</span></div>';
+      html += '<div class="row"><span class="label">Est. Jumps</span><span class="value">' + (data.estJumps || '?') + '</span></div>';
+      if (data.fromCoords && data.toCoords) {
+        html += '<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border)">';
+        html += '<div class="row"><span class="label">From</span><span class="value" style="font-size:0.8em">(' + data.fromCoords.x?.toFixed(1) + ', ' + data.fromCoords.y?.toFixed(1) + ', ' + data.fromCoords.z?.toFixed(1) + ')</span></div>';
+        html += '<div class="row"><span class="label">To</span><span class="value" style="font-size:0.8em">(' + data.toCoords.x?.toFixed(1) + ', ' + data.toCoords.y?.toFixed(1) + ', ' + data.toCoords.z?.toFixed(1) + ')</span></div>';
+        html += '</div>';
+      }
+      if (data.fromError) html += '<div style="color:var(--red);margin-top:8px;font-size:0.82em">From system not found: ' + escapeHtml(data.fromError) + '</div>';
+      if (data.toError) html += '<div style="color:var(--red);margin-top:8px;font-size:0.82em">To system not found: ' + escapeHtml(data.toError) + '</div>';
+      html += '</div>';
+      result.innerHTML = html;
+    }
+  } catch (e) {
+    result.innerHTML = '<div class="error">Failed to calculate route.</div>';
+  }
+}
 </script>
 
 </body>
@@ -250,5 +346,5 @@ def index():
 
 
 if __name__ == "__main__":
-    print("Elite Companion v0.2 running on http://localhost:5000")
+    print("Elite Companion v0.3 running on http://localhost:5000")
     app.run(host="0.0.0.0", port=5000, debug=True)
