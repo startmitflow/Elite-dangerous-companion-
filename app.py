@@ -310,6 +310,9 @@ document.getElementById('systemInput').addEventListener('keypress', e => {
 document.getElementById('routeTo').addEventListener('keypress', e => {
   if (e.key === 'Enter') calcRoute();
 });
+document.getElementById('routeRange').addEventListener('keypress', e => {
+  if (e.key === 'Enter') calcRoute();
+});
 
 async function calcRoute() {
   const from = $('routeFrom').value.trim();
