@@ -37,10 +37,14 @@ def api_system(name):
         "showCoordinates": 1,
         "showStations": 1,
     })
-    stations = esm_get("/api-system-v1/stations", {"systemName": name})
+    stations_data = esm_get("/api-system-v1/stations", {"systemName": name})
+    # EDSM returns { "stations": [...] }
+    stations_list = stations_data.get("stations", []) if isinstance(stations_data, dict) else []
+    if not stations_list and isinstance(stations_data, list):
+        stations_list = stations_data
     return jsonify({
         "system": system,
-        "stations": stations if not isinstance(stations, dict) or "error" not in stations else [],
+        "stations": stations_list,
     })
 
 
@@ -98,7 +102,7 @@ button:disabled{opacity:0.5;cursor:not-allowed}
 <body>
 
 <h1>⚔ Elite Companion</h1>
-<p class="subtitle">by StartMit — v0.2</p>
+<p class="subtitle">by StartMit — v0.2-fix</p>
 
 <div class="card">
   <input id="systemInput" type="text" placeholder="Enter system name..." value="Diaguandri">
@@ -155,19 +159,21 @@ async function loadMarket(systemName, stationName, btn) {
 }
 
 function renderMarket(container, data) {
-  if (!data || data.error || !data.items || data.items.length === 0) {
+  // EDSM returns { commodities: [...] } or empty {}
+  const commodities = data.commodities || [];
+  if (!data || data.error || commodities.length === 0) {
     container.innerHTML = '<div class="empty-state" style="padding:15px">No market data available for this station.</div>';
     return;
   }
 
   let html = '<div style="margin-top:12px">';
   html += '<div class="market-header"><span>Commodity</span><span>Buy</span><span>Sell</span><span>Supply</span></div>';
-  data.items.slice(0, 20).forEach(item => {
+  commodities.slice(0, 20).forEach(item => {
     html += '<div class="market-row">';
     html += '<span class="market-name">' + escapeHtml(item.name || 'Unknown') + '</span>';
-    html += '<span class="market-buy">' + (item.priceBuy ? '€' + item.priceBuy.toLocaleString() : '-') + '</span>';
-    html += '<span class="market-sell">' + (item.priceSell ? '€' + item.priceSell.toLocaleString() : '-') + '</span>';
-    html += '<span class="market-supply">' + (item.stock != null ? item.stock.toLocaleString() : '-') + '</span>';
+    html += '<span class="market-buy">' + (item.buyPrice ? '€' + item.buyPrice.toLocaleString() : '-') + '</span>';
+    html += '<span class="market-sell">' + (item.sellPrice ? '€' + item.sellPrice.toLocaleString() : '-') + '</span>';
+    html += '<span class="market-supply">' + (item.stock != null ? item.stock.toLocaleString() : (item.demand || '-')) + '</span>';
     html += '</div>';
   });
   html += '</div>';
