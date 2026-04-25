@@ -82,6 +82,11 @@ def api_route():
     if to_data.get("error"):
         result["toError"] = to_data.get("error")
 
+    # Get jump range from query param, default to 30 (medium exploration ship)
+    jump_range = float(request.args.get("range", 30))
+    if jump_range <= 0:
+        jump_range = 30
+
     try:
         fc = from_data.get("coordinates", {})
         tc = to_data.get("coordinates", {})
@@ -89,7 +94,8 @@ def api_route():
                 (tc.get("y", 0) - fc.get("y", 0))**2 +
                 (tc.get("z", 0) - fc.get("z", 0))**2)**0.5
         result["distanceLy"] = round(dist, 2)
-        result["estJumps"] = max(1, round(dist / 30))
+        result["estJumps"] = max(1, round(dist / jump_range))
+        result["jumpRange"] = jump_range
         result["fromCoords"] = {"x": fc.get("x"), "y": fc.get("y"), "z": fc.get("z")}
         result["toCoords"] = {"x": tc.get("x"), "y": tc.get("y"), "z": tc.get("z")}
     except (TypeError, ValueError):
@@ -154,7 +160,7 @@ button:disabled{opacity:0.5;cursor:not-allowed}
 
 <div class="card" style="border-color:var(--accent);border-width:2px">
   <div class="card-title" style="color:var(--accent)">🗺️ Route Planner</div>
-  <div style="display:grid;grid-template-columns:1fr 1fr auto;gap:10px;align-items:end">
+  <div style="display:grid;grid-template-columns:1fr 1fr 80px auto;gap:10px;align-items:end">
     <div class="form-group">
       <label>From System</label>
       <input id="routeFrom" type="text" placeholder="Sol">
@@ -162,6 +168,10 @@ button:disabled{opacity:0.5;cursor:not-allowed}
     <div class="form-group">
       <label>To System</label>
       <input id="routeTo" type="text" placeholder="Diaguandri">
+    </div>
+    <div class="form-group">
+      <label>Jump (Ly)</label>
+      <input id="routeRange" type="number" placeholder="30" value="30" style="margin-bottom:0">
     </div>
     <button class="btn btn-primary" style="width:auto;padding:12px 20px" onclick="calcRoute()">Go</button>
   </div>
@@ -304,19 +314,21 @@ document.getElementById('routeTo').addEventListener('keypress', e => {
 async function calcRoute() {
   const from = $('routeFrom').value.trim();
   const to = $('routeTo').value.trim();
+  const range = parseFloat($('routeRange').value) || 30;
   if (!from || !to) return;
   const result = $('routeResult');
   result.style.display = 'none';
   result.innerHTML = '<div class="empty-state">Calculating route...</div>';
   result.style.display = 'block';
   try {
-    const res = await fetch('/api/route?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to));
+    const res = await fetch('/api/route?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to) + '&range=' + range);
     const data = await res.json();
     if (data.error) {
       result.innerHTML = '<div class="error">' + escapeHtml(data.error) + '</div>';
     } else {
       let html = '<div class="route-card">';
       html += '<div style="color:var(--accent);font-size:0.9em;margin-bottom:10px">Route: ' + escapeHtml(data.from) + ' → ' + escapeHtml(data.to) + '</div>';
+      html += '<div style="color:var(--dim);font-size:0.8em;margin-bottom:10px">Jump range: ' + data.jumpRange + ' Ly</div>';
       html += '<div class="row"><span class="label">Distance</span><span class="value">' + (data.distanceLy || '?') + ' Ly</span></div>';
       html += '<div class="row"><span class="label">Est. Jumps</span><span class="value">' + (data.estJumps || '?') + '</span></div>';
       if (data.fromCoords && data.toCoords) {
